@@ -1,0 +1,578 @@
+# -*- python -*-
+# ex: set syntax=python:
+
+import os
+from buildbot.plugins import *
+from buildbot.changes.filter import ChangeFilter
+from buildbot.schedulers import timed
+from buildbot.reporters.http import HttpStatusPush
+
+# 0.8.x stuff
+#from buildbot.plugins import changes
+#from buildbot.status.status_push import HttpStatusPush
+#from buildbot.plugins import buildslave, schedulers, status, steps, util
+#from buildbot.status import html
+#from buildbot.status.web import authz, auth
+
+from zcash_factories import (
+    PairingPerformanceFactory,
+    SaplingTestFactory,
+    ZcashASanFactory,
+    ZcashCheckDependsFactory,
+    ZcashCoverageFactory,
+    ZcashExpectedFailuresFactory,
+    ZcashInitialBlockDownloadTimeFactory,
+    ZcashMergeTestFactory,
+    ZcashPerformanceFactory,
+    ZcashProtonMergeTestFactory,
+    ZcashTSanFactory,
+    ZcashValgrindFactory,
+)
+
+from zcash_helpers import (
+    load_webcreds,
+    read_or_generate_secret,
+    read_required_path,
+)
+
+
+def trigger(supportedSchedulerNames, unsupportedSchedulerNames, **kw):
+    haltOnFailure = kw.pop('haltOnFailure', False)
+    waitForFinish = kw.pop('waitForFinish', True)
+    return steps.Trigger(
+        schedulerNames=supportedSchedulerNames+unsupportedSchedulerNames,
+        unimportantSchedulerNames=unsupportedSchedulerNames,
+        haltOnFailure=haltOnFailure,
+        waitForFinish=waitForFinish,
+        set_properties=kw,
+    )
+
+eu = os.path.expanduser
+
+# Read some external configuration to help with
+# credentials-config-management:
+LATENT_WORKER_PASS = read_or_generate_secret(eu('~/latent_worker.password'), False)
+LATENT_WORKER1_NAME = 'latent-1'
+
+BENCHMARK_WORKER_NAME = 'builder-0'
+BENCHMARK_WORKER_PASS = read_or_generate_secret(eu('~/worker.password'), False)
+
+GH_WEBHOOK_SECRET = read_or_generate_secret(eu('~/github.webhook-secret'), True)
+GH_STATUS_TOKEN = read_required_path(
+    eu('~/github.status-secret'),
+    'This path must contain a GitHub token granting status update capabilities.',
+)
+WEB_CREDS = load_webcreds(eu('~/webcreds.json'))
+HOMU_SECRET = read_required_path(
+    eu('~/homu.secret'),
+    'This path must contain the Homu status auth secret.'
+)
+
+authz = util.Authz(
+  allowRules=[
+    util.AnyControlEndpointMatcher(role='admins'),
+  ],
+  roleMatchers=[
+    util.RolesFromUsername(
+        roles=['admins'],
+        usernames=[cred[0] for cred in WEB_CREDS])
+  ]
+)
+auth = util.UserPasswordAuth(WEB_CREDS)
+
+bench_lock = util.WorkerLock("run-benchmarks", maxCount=1)
+
+BuildmasterConfig = c = {}
+
+####### WORKERS
+
+w_arch = [
+    'archlinux-0',
+]
+
+w_centos7 = [
+    'centos-0',
+]
+
+w_deb8 = [
+    'latent-0',
+]
+
+w_deb8_kitchensink = [
+    'kitchensink-0',
+]
+
+w_deb9 = [
+    'debian9-0',
+]
+
+w_ubuntu1604 = [
+    'ubuntu-0',
+]
+
+
+w_supported = \
+    w_deb8 + \
+    w_deb9 + \
+    w_ubuntu1604
+
+w_test = \
+    w_arch + \
+    w_centos7 + \
+    w_deb8 + \
+    w_deb8_kitchensink + \
+    w_deb9 + \
+    w_ubuntu1604
+
+w_grind = [
+    LATENT_WORKER1_NAME,
+    'builder-1',
+]
+
+c['workers'] = []
+
+ec2_workers = {
+    LATENT_WORKER1_NAME: [
+      'ami-025cb858c621e6bea',
+      'c5.4xlarge'
+    ],
+    'archlinux-0': ['ami-2e3fe656', 'c4.4xlarge'],
+    'centos-0': ['ami-d731e8af', 'c4.4xlarge'],
+    'latent-0': ['ami-fd3ee785', 'c4.4xlarge'],
+    'kitchensink-0': ['ami-1ea8b467', 'c4.4xlarge'],
+    'debian9-0': ['ami-f73ee78f', 'c4.4xlarge'],
+    'ubuntu-0': ['ami-0f30e977', 'c4.4xlarge'],
+}
+
+for name, worker_attributes in ec2_workers.items():
+    ami = worker_attributes[0]
+    instance_type = worker_attributes[1]
+    c['workers'].append(worker.EC2LatentWorker(
+        name, LATENT_WORKER_PASS, instance_type,
+        ami=ami,
+        region='us-west-2',
+        keypair_name='buildbot_aws_keypair',
+        security_group_ids=['sg-26bccb40'],
+        subnet_id='subnet-19c0be40'))
+
+c['workers'].append(worker.Worker(BENCHMARK_WORKER_NAME, BENCHMARK_WORKER_PASS))
+c['workers'].append(worker.Worker('builder-1', BENCHMARK_WORKER_PASS))
+
+c['protocols'] = {'pb': {'port': 9899}}
+
+####### BUILDERS
+
+# The tags we use.
+# Active builders (tested against PRs) must have one of these tags.
+TAG_SUPPORTED = "supported"
+TAG_UNSUPPORTED = "unsupported"
+
+b_test = []
+
+b_test.append({
+    'name': 'archlinux',
+    'workernames': w_arch,
+    'factory': ZcashMergeTestFactory(),
+    'properties': {
+        'github_repo_owner': 'zcash',
+        'github_repo_name': 'zcash',
+            },
+    'tags': [
+        'unsupported',
+    ],
+})
+
+b_test.append({
+    'name': 'centos7',
+    'workernames': w_centos7,
+    'factory': ZcashMergeTestFactory(),
+    'properties': {
+        'github_repo_owner': 'zcash',
+        'github_repo_name': 'zcash',
+            },
+    'tags': [
+        'unsupported',
+    ],
+})
+
+b_test.append({
+    'name': 'debian8',
+    'workernames': w_deb8,
+    'factory': ZcashMergeTestFactory(),
+    'properties': {
+        'github_repo_owner': 'zcash',
+        'github_repo_name': 'zcash',
+            },
+    'tags': [
+        'supported',
+    ],
+})
+
+b_test.append({
+    'name': 'debian8-kitchensink',
+    'workernames': w_deb8_kitchensink,
+    'factory': ZcashProtonMergeTestFactory(),
+    'properties': {
+        'github_repo_owner': 'zcash',
+        'github_repo_name': 'zcash',
+        'configure_flags': ['--with-libs'],    },
+    'tags': [
+        'unsupported',
+    ],
+})
+
+b_test.append({
+    'name': 'debian9',
+    'workernames': w_deb9,
+    'factory': ZcashMergeTestFactory(),
+    'properties': {
+        'github_repo_owner': 'zcash',
+        'github_repo_name': 'zcash',
+            },
+    'tags': [
+        'supported',
+    ],
+})
+
+b_test.append({
+    'name': 'ubuntu16-04',
+    'workernames': w_ubuntu1604,
+    'factory': ZcashMergeTestFactory(),
+    'properties': {
+        'github_repo_owner': 'zcash',
+        'github_repo_name': 'zcash',
+            },
+    'tags': [
+        'supported',
+    ],
+})
+
+
+b_test.append({
+    'name': 'expected-fail',
+    'workernames': w_supported,
+    'factory': ZcashExpectedFailuresFactory(),
+    'properties': {
+        'github_repo_owner': 'zcash',
+        'github_repo_name': 'zcash',
+    },
+    'tags': [TAG_SUPPORTED],
+})
+
+b_grind = []
+
+b_grind.append({
+    'name': 'asan',
+    'workernames': w_grind,
+    'factory': ZcashASanFactory(),
+    'properties': {
+        'github_repo_owner': 'zcash',
+        'github_repo_name': 'zcash',
+    },
+})
+
+b_grind.append({
+    'name': 'tsan',
+    'workernames': w_grind,
+    'factory': ZcashTSanFactory(),
+    'properties': {
+        'github_repo_owner': 'zcash',
+        'github_repo_name': 'zcash',
+    },
+})
+
+b_grind.append({
+    'name': 'valgrind-bench',
+    'workernames': w_grind,
+    'factory': ZcashValgrindFactory(),
+    'properties': {
+        'github_repo_owner': 'zcash',
+        'github_repo_name': 'zcash',
+    },
+})
+
+b_perf = []
+
+b_perf.append({
+    'name': 'bench-SyS-E3-SAT-2',
+    'workernames': [BENCHMARK_WORKER_NAME],
+    'factory': ZcashPerformanceFactory(),
+    'locks': [bench_lock.access('exclusive')],
+    'properties': {
+        'github_repo_owner': 'zcash',
+        'github_repo_name': 'zcash',
+    },
+})
+
+b_perf_slow = []
+
+b_perf_slow.append({
+    'name': 'bench-ibd-SyS-E3-SAT-2',
+    'workernames': [BENCHMARK_WORKER_NAME],
+    'factory': ZcashInitialBlockDownloadTimeFactory(),
+    'locks': [bench_lock.access('exclusive')],
+    'properties': {
+        'github_repo_owner': 'zcash',
+        'github_repo_name': 'zcash',
+    },
+})
+
+b_other = []
+
+b_other.append({
+    'name': 'coverage',
+    'workernames': w_grind,
+    'factory': ZcashCoverageFactory(),
+    'properties': {
+        'github_repo_owner': 'zcash',
+        'github_repo_name': 'zcash',
+    },
+})
+
+b_other.append({
+    'name': 'check-depends',
+    'workernames': w_grind,
+    'factory': ZcashCheckDependsFactory(),
+    'properties': {
+        'github_repo_owner': 'zcash',
+        'github_repo_name': 'zcash',
+    },
+})
+
+b_homu = []
+
+b_homu.append({
+    'name': 'pr-merge',
+    'workernames': w_test,
+    'factory': util.BuildFactory([
+        trigger(
+            ['merge-test-supported'],
+            ['merge-test-unsupported'],
+            haltOnFailure=True),
+    ]),
+})
+
+b_homu.append({
+    'name': 'pr-try',
+    'workernames': w_test,
+    'factory': util.BuildFactory([
+        trigger(
+            ['merge-test-supported'],
+            ['merge-test-unsupported'],
+            haltOnFailure=True),
+    ]),
+})
+
+b_pairing = [{
+    'name': 'pairing-bench-SyS-E3-SAT-2',
+    'workernames': [BENCHMARK_WORKER_NAME],
+    'factory': PairingPerformanceFactory(),
+    'locks': [bench_lock.access('exclusive')],
+}]
+
+b_sapling = []
+
+b_sapling.append({
+    'name': 'sapling-archlinux',
+    'workernames': w_arch,
+    'factory': SaplingTestFactory("x86_64-unknown-linux-gnu"),
+    'tags': [
+        'unsupported',
+    ],
+})
+
+b_sapling.append({
+    'name': 'sapling-centos7',
+    'workernames': w_centos7,
+    'factory': SaplingTestFactory("x86_64-unknown-linux-gnu"),
+    'tags': [
+        'unsupported',
+    ],
+})
+
+b_sapling.append({
+    'name': 'sapling-debian8',
+    'workernames': w_deb8,
+    'factory': SaplingTestFactory("x86_64-unknown-linux-gnu"),
+    'tags': [
+        'supported',
+    ],
+})
+
+b_sapling.append({
+    'name': 'sapling-debian8-kitchensink',
+    'workernames': w_deb8_kitchensink,
+    'factory': SaplingTestFactory("x86_64-unknown-linux-gnu"),
+    'tags': [
+        'unsupported',
+    ],
+})
+
+b_sapling.append({
+    'name': 'sapling-debian9',
+    'workernames': w_deb9,
+    'factory': SaplingTestFactory("x86_64-unknown-linux-gnu"),
+    'tags': [
+        'supported',
+    ],
+})
+
+b_sapling.append({
+    'name': 'sapling-ubuntu16-04',
+    'workernames': w_ubuntu1604,
+    'factory': SaplingTestFactory("x86_64-unknown-linux-gnu"),
+    'tags': [
+        'supported',
+    ],
+})
+
+
+c['builders'] = b_test + b_grind + b_perf + b_perf_slow + b_other + b_homu + b_pairing + b_sapling
+
+####### CHANGESOURCES
+
+# Two GitPollers with unique URLs are necessary in order to detect the same
+# commit being pushed first to 'auto' and then to 'master'
+c['change_source'] = [
+    changes.GitPoller(
+        'git@github.com:Electric-Coin-Company/dev-ci-zcash.git',
+        project='zcash',
+        workdir='gitpoller-workdir',
+        branches=["auto", "try"],
+        pollinterval=60),
+    changes.GitPoller(
+        'https://github.com/Electric-Coin-Company/dev-ci-zcash.git',
+        project='zcash',
+        workdir='gitpoller-workdir-2',
+        branches=["master"],
+        pollinterval=60),
+]
+
+####### SCHEDULERS
+
+c['schedulers'] = [
+    schedulers.SingleBranchScheduler(
+        name="master",
+        change_filter=util.ChangeFilter(project='zcash', branch='master'),
+        treeStableTimer=60,
+        builderNames=[b['name'] for b in b_grind + b_perf] + ['coverage'],
+        properties={
+            'publish': False,
+        },
+    ),
+    schedulers.SingleBranchScheduler(
+        name="pr-merge",
+        change_filter=util.ChangeFilter(project='zcash', branch='auto'),
+        treeStableTimer=60,
+        builderNames=['pr-merge']
+    ),
+    schedulers.SingleBranchScheduler(
+        name="pr-try",
+        change_filter=util.ChangeFilter(project='zcash', branch='try'),
+        treeStableTimer=60,
+        builderNames=['pr-try']
+    ),
+    schedulers.SingleBranchScheduler(
+        name="pr-rollup",
+        change_filter=util.ChangeFilter(project='zcash', branch='rollup'),
+        treeStableTimer=60,
+        builderNames=[b['name'] for b in b_test]
+    ),
+    # TODO: Run the depends-sources test for all of the branches we want it
+    # to be possible to build.
+    timed.Nightly(
+        name="check-depends-nightly",
+        builderNames=["check-depends"],
+        hour=3,
+        minute=0,
+        branch="master",
+    ),
+    # FIXME: Do we have to fix the force scheduler in the same way?
+    schedulers.ForceScheduler(
+        name="force",
+        builderNames=[b['name'] for b in c['builders']],
+    ),
+    schedulers.ForceScheduler(
+        name="force-perf",
+        builderNames=[b['name'] for b in b_perf + b_perf_slow + b_pairing],
+        properties=[
+            util.BooleanParameter(
+                name='publish',
+                label='Publish results to https://speed.z.cash',
+                default=False,
+            ),
+        ],
+    ),
+    schedulers.Triggerable(
+        name="merge-test-supported",
+        builderNames=[b['name'] for b in b_test if TAG_SUPPORTED in b['tags']]
+    ),
+    schedulers.Triggerable(
+        name="merge-test-unsupported",
+        builderNames=[b['name'] for b in b_test if TAG_UNSUPPORTED in b['tags']]
+    ),
+    timed.Nightly(
+        name="perf-slow",
+        change_filter=util.ChangeFilter(project='zcash', branch='master'),
+        builderNames=[b['name'] for b in b_perf_slow],
+        hour=3,
+        minute=0,
+        dayOfWeek=6,
+        onlyIfChanged=True,
+        properties={
+            'publish': False,
+        },
+    ),
+    schedulers.SingleBranchScheduler(
+        name="pairing",
+        change_filter=util.ChangeFilter(project='pairing'),
+        treeStableTimer=60,
+        builderNames=[b['name'] for b in b_pairing],
+        properties={
+            'publish': False,
+        },
+    ),
+    schedulers.SingleBranchScheduler(
+        name="sapling",
+        change_filter=util.ChangeFilter(project='sapling'),
+        treeStableTimer=60,
+        builderNames=[b['name'] for b in b_sapling],
+    ),
+]
+
+####### BUILDBOT SERVICES
+
+def homuStatusUpdate(build):
+    build['secret'] = HOMU_SECRET
+    return build
+
+c['services'] = [
+    HttpStatusPush(
+        serverUrl='http://127.0.0.1:12477/buildbot',
+        format_fn=homuStatusUpdate,
+        wantProperties=True,
+        wantSteps=True,
+    ),
+]
+
+####### PROJECT IDENTITY
+
+c['title'] = 'Zcash'
+c['titleURL'] = 'https://z.cash/'
+c['buildbotURL'] = "https://dev-ci.z.cash/"
+c['buildbotNetUsageData'] = None
+
+c['www'] = {
+    'port': 80,
+    'plugins': {
+        'waterfall_view': True,
+        'console_view': True,
+    },
+    'auth': auth,
+    'authz': authz,
+}
+
+####### DB URL
+
+c['db'] = {'db_url': "sqlite:///state.sqlite"}
+

@@ -25,12 +25,14 @@ spec:
             secretKeyRef:
               name: buildbot
               key: pg_password
+        - name: PGDATA
+          value: /pgdata_mount/pgdata
         ports:
         - containerPort: 5432
           name: pg
         volumeMounts:
         - name: pg-buildbot
-          mountPath: /var/lib/postgresql/data
+          mountPath: /pgdata_mount
       volumes:
       - name: pg-buildbot
         persistentVolumeClaim:

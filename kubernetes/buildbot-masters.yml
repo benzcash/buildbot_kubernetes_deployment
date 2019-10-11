@@ -15,11 +15,9 @@ spec:
     spec:
       containers:
       - name: buildbot-master
-        image: buildbot/buildbot-master:v0.9.7
+        image: gcr.io/uplifted-plate-210520/bbmaster:latest
         imagePullPolicy: Always
         env:
-        - name: BUILDBOT_CONFIG_URL
-          value: file:///mnt/master.cfg
         - name: BUILDBOT_MASTER_URL
           valueFrom:
             configMapKeyRef:
