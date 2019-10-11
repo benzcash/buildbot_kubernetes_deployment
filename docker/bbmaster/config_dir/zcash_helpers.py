@@ -4,18 +4,17 @@ import os
 from buildbot.interfaces import IRenderable
 from textwrap import dedent, wrap
 from twisted.python import log
-from zope.interface import implements
-
+from zope.interface.declarations import implementer
 
 def notify(tmpl, *args, **kw):
     """Print a big obvious banner. Reformats msg to allow indented triple-strings."""
     msg = tmpl.format(*args, **kw)
-    print ' ***'
-    print ' *** ' + ('\n *** '.join(wrap(dedent(msg))).strip())
-    print ' ***'
+    print(' ***')
+    print(' *** ' + ('\n *** '.join(wrap(dedent(msg))).strip()))
+    print(' ***')
 
 def _read_path(path):
-    with file(path, 'r') as f:
+    with open(path, 'r') as f:
         return f.read()
 
 def read_optional_path(path):
@@ -32,8 +31,8 @@ def read_required_path(path, description):
     if result is not None:
         return result
 
-    print ' ***'
-    print ' *** Could not read: {!r}'.format(path)
+    print(' ***')
+    print(' *** Could not read: {!r}'.format(path))
     notify(description)
     e = IOError('{}: {!r}'.format(os.strerror(errno.ENOENT), path))
     e.errno = errno.ENOENT
@@ -64,14 +63,13 @@ def read_or_generate_secret(path, githubsecret):
 def load_webcreds(path):
     filedesc = 'A json file with an array, each element is [username, password]'
     jsoncreds = json.loads(read_required_path(path, filedesc))
-    creds = []
+    creds = dict() 
     try:
         for entry in jsoncreds:
             [username, password] = entry
-            username = username.encode('utf8')
-            password = password.encode('utf8')
-            entry = (username, password)
-            creds.append(entry)
+            #username = username.encode('utf8')
+            #password = password.encode('utf8')
+            creds[str(username)] = str(password)
     except:
         notify(
             'There was a JSON format error loading {!r}, which should be: {}',
@@ -83,9 +81,8 @@ def load_webcreds(path):
         return creds
 
 
+@implementer(IRenderable)
 class GoodRepo:
-    implements(IRenderable)
-
     def __init__(self, repos, default_repourl):
         self.repos = repos
         self.default_repourl = default_repourl

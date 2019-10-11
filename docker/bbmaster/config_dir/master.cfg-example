@@ -3,27 +3,85 @@
 
 import os
 from buildbot.plugins import *
+from buildbot.changes.filter import ChangeFilter
+from buildbot.schedulers import timed
+from buildbot.reporters.http import HttpStatusPush
 
-# This is a sample buildmaster config file. It must be installed as
-# 'master.cfg' in your buildmaster's base directory.
+# 0.8.x stuff
+#from buildbot.plugins import changes
+#from buildbot.status.status_push import HttpStatusPush
+#from buildbot.plugins import buildslave, schedulers, status, steps, util
+#from buildbot.status import html
+#from buildbot.status.web import authz, auth
+
+# from zcash_factories import (
+#     PairingPerformanceFactory,
+#     SaplingTestFactory,
+#     ZcashASanFactory,
+#     ZcashCheckDependsFactory,
+#     ZcashCoverageFactory,
+#     ZcashExpectedFailuresFactory,
+#     ZcashInitialBlockDownloadTimeFactory,
+#     ZcashMergeTestFactory,
+#     ZcashPerformanceFactory,
+#     ZcashProtonMergeTestFactory,
+#     ZcashTSanFactory,
+#     ZcashValgrindFactory,
+# )
+
+# from zcash_helpers import (
+#     load_webcreds,
+#     read_or_generate_secret,
+#     read_required_path,
+# )
+
+WEB_CREDS={"homer": "doh!"}
+
+authz = util.Authz(
+  allowRules=[
+    util.AnyControlEndpointMatcher(role='admins'),
+  ],
+  roleMatchers=[
+    util.RolesFromUsername(
+        roles=['admins'],
+        usernames=[cred[0] for cred in WEB_CREDS])
+  ]
+)
+auth = util.UserPasswordAuth(WEB_CREDS)
+
+def trigger(supportedSchedulerNames, unsupportedSchedulerNames, **kw):
+    haltOnFailure = kw.pop('haltOnFailure', False)
+    waitForFinish = kw.pop('waitForFinish', True)
+    return steps.Trigger(
+        schedulerNames=supportedSchedulerNames+unsupportedSchedulerNames,
+        unimportantSchedulerNames=unsupportedSchedulerNames,
+        haltOnFailure=haltOnFailure,
+        waitForFinish=waitForFinish,
+        set_properties=kw,
+    )
 
 # This is the dictionary that the buildmaster pays attention to. We also use
 # a shorter alias to save typing.
 c = BuildmasterConfig = {}
 
 ####### WORKERS
-
-# The 'workers' list defines the set of recognized workers. Each element is
-# a Worker object, specifying a unique worker name and password.  The same
-# worker name and password must be configured on the worker.
-num_workers = int(os.environ.get('NUM_WORKERS', 1))
 worker_password = os.environ['WORKER_PASSWORD']
 
-c['workers'] = [
-    worker.Worker("example-worker-{0}".format(worker_id) , worker_password)
-    for worker_id in range(num_workers)
-]
+c['workers'] = []
 
+c['workers'].append(worker.KubeLatentWorker(
+    'kube-buildbot-worker',
+    image='buildbot/buildbot-worker',
+    namespace='default',
+    kube_config=util.KubeInClusterConfigLoader()
+))
+
+c['workers'].append(worker.KubeLatentWorker(
+    'bbworker-debian9',
+    image='gcr.io/uplifted-plate-210520/bbworker-debian9:latest',
+    namespace='default',
+    kube_config=util.KubeInClusterConfigLoader()
+))
 
 c['mq'] = {
     'type': 'wamp',
@@ -45,7 +103,7 @@ c['protocols'] = {'pb': {'port': 9989}}
 
 c['change_source'] = []
 c['change_source'].append(changes.GitPoller(
-        'git://github.com/buildbot/pyflakes.git',
+        'git://github.com/doubtingben/back-channel.git',
         workdir='gitpoller-workdir', branch='master',
         pollinterval=300))
 
@@ -59,10 +117,15 @@ c['schedulers'].append(schedulers.SingleBranchScheduler(
                             name="all",
                             change_filter=util.ChangeFilter(branch='master'),
                             treeStableTimer=None,
-                            builderNames=["runtests"]))
-c['schedulers'].append(schedulers.ForceScheduler(
-                            name="force",
-                            builderNames=["runtests"]))
+                            builderNames=["bbworker-debian9-test"]))
+
+# define the periodic scheduler
+c['schedulers'].append(schedulers.Periodic(name="fiveminutes-kube-buildbot-worker-test",
+                                      builderNames=["kube-buildbot-worker-test"],
+                                      periodicBuildTimer=300))
+c['schedulers'].append(schedulers.Periodic(name="fiveminutes-bbworker-debian9-test",
+                                      builderNames=["bbworker-debian9-test"],
+                                      periodicBuildTimer=300))
 
 ####### BUILDERS
 
@@ -71,15 +134,17 @@ c['schedulers'].append(schedulers.ForceScheduler(
 # only take place on one worker.
 
 factory = util.BuildFactory()
-# check out the source
-factory.addStep(steps.Git(repourl='git://github.com/buildbot/pyflakes.git', mode='incremental'))
-# run the tests (note that this will require that 'trial' is installed)
-factory.addStep(steps.ShellCommand(command=["trial", "pyflakes"]))
+factory.addStep(steps.Git(repourl='git://github.com/doubtingben/back-channel.git', mode='incremental'))
+factory.addStep(steps.ShellCommand(command=["echo", "hello world"]))
 
 c['builders'] = []
 c['builders'].append(
-    util.BuilderConfig(name="runtests",
-        workernames=[worker.name for worker in c['workers']],
+    util.BuilderConfig(name="kube-buildbot-worker-test",
+        workernames=['kube-buildbot-worker'],
+        factory=factory))
+c['builders'].append(
+    util.BuilderConfig(name="bbworker-debian9-test",
+        workernames=['bbworker-debian9'],
         factory=factory))
 
 ####### BUILDBOT SERVICES
@@ -95,8 +160,8 @@ c['services'] = []
 # the 'title' string will appear at the top of this buildbot installation's
 # home pages (linked to the 'titleURL').
 
-c['title'] = "Pyflakes"
-c['titleURL'] = "https://launchpad.net/pyflakes"
+c['title'] = "k8s-dev-ci.z.cash"
+c['titleURL'] = "https://k8s-dev-ci.z.cash"
 c['buildbotNetUsageData'] = 'basic'
 
 # the 'buildbotURL' string should point to the location where the buildbot's
@@ -107,8 +172,15 @@ c['buildbotNetUsageData'] = 'basic'
 c['buildbotURL'] = os.environ.get('BUILDBOT_MASTER_URL', 'http://localhost:8010/')
 
 # minimalistic config to activate new web UI
-c['www'] = dict(port=8010,
-                plugins=dict(waterfall_view={}, console_view={}))
+c['www'] = {
+    'port': 8010,
+    'plugins': {
+        'waterfall_view': True,
+        'console_view': True,
+    },
+    'auth': auth,
+    'authz': authz,
+}
 
 ####### DB URL
 

@@ -1,5 +1,5 @@
 import os
-import urlparse
+import urllib.request, urllib.parse, urllib.error
 
 from buildbot.plugins import steps, util
 
@@ -25,16 +25,16 @@ CODESPEED_CERT = eu('~/speed_z_cash.pem')
 CODESPEED_PASS = read_or_generate_secret(eu('~/codespeed.password'), False)
 
 REPOS = []
-PROJECT = 'dev-ci-zcash'
+PROJECT = '{{ homu_github_repo_name }}'
 for HOST in ['github.com']:
-    for USER in ['Electric-Coin-Company', 'daira', 'ebfull', 'nathan-at-least', 'str4d']:
+    for USER in ['{{ homu_github_repo_owner }}', '{{ buildbot_repo_users|join("\', \'") }}']:
         PATH = '/'.join([USER, PROJECT])
         SSH_PATH = ':'.join([HOST, PATH])
         HTTPS_PATH = '/'.join([HOST, PATH])
         REPOS.append("git@" + SSH_PATH + ".git")
         REPOS.append("https://" + HTTPS_PATH)
         REPOS.append("https://" + HTTPS_PATH + ".git")
-DEFAULT_REPOURL = "https://github.com/Electric-Coin-Company/dev-ci-zcash.git"
+DEFAULT_REPOURL = "{{ buildbot_git_source }}"
 
 git_source = GoodRepo(REPOS, DEFAULT_REPOURL)
 
@@ -106,7 +106,7 @@ def asan(stage_name):
 @util.renderer
 def nproc(props):
     name = props.getProperty('workername')
-    if name in ['macos-0', 'macos-1']:
+    if name in {{ buildbot_cmd_subs.gnproc }}:
         return ['gnproc']
     else:
         return ['nproc']
@@ -197,7 +197,7 @@ class ZcashPerformanceFactory(ZcashBaseFactory):
         ZcashBaseFactory.__init__(self)
 
         self.addSteps([
-            steps.FileDownload(mastersrc="/home/bbmaster/block-107134.tar.xz", workerdest="block-107134.tar.xz"),
+            steps.FileDownload(mastersrc="/home/{{ buildbot_master_user }}/block-107134.tar.xz", workerdest="block-107134.tar.xz"),
             sh('wget', '-N', 'https://z.cash/downloads/benchmarks/benchmark-200k-UTXOs.tar.xz', name='download benchmark-200k-UTXOs.tar.xz'),
             time('sleep'),
             time('parameterloading'),
@@ -228,7 +228,7 @@ class ZcashPerformanceFactory(ZcashBaseFactory):
             memory('sendtoaddress', '200k-recv', 0.0999, name='memory-sendtoaddress-200k-recv-100'),
             memory('loadwallet', '200k-recv', name='memory-loadwallet-200k-recv'),
             memory('listunspent', '200k-recv', name='memory-listunspent-200k-recv'),
-            steps.POST(urlparse.urljoin(CODESPEED_URL, '/result/add/json/'),
+            steps.POST(urllib.parse.urljoin(CODESPEED_URL, '/result/add/json/'),
                 data={'json': getPerfJson},
                 auth=('buildbot', CODESPEED_PASS),
                 verify=CODESPEED_CERT,
@@ -240,10 +240,10 @@ class ZcashPerformanceFactory(ZcashBaseFactory):
     def _addPreBuildSteps(self):
         self.addSteps([
             steps.FileDownload(
-                mastersrc="/home/bbmaster/zcash-librustzcash-alloc.diff",
+                mastersrc="/home/{{ buildbot_master_user }}/zcash-librustzcash-alloc.diff",
                 workerdest="zcash-librustzcash-alloc.diff"),
             steps.FileDownload(
-                mastersrc="/home/bbmaster/librustzcash-alloc.diff",
+                mastersrc="/home/{{ buildbot_master_user }}/librustzcash-alloc.diff",
                 workerdest="depends/patches/librustzcash/librustzcash-alloc.diff"),
             steps.ShellCommand(
                 command=['patch', '-p1', '-i', 'zcash-librustzcash-alloc.diff'],
@@ -271,7 +271,7 @@ class ZcashInitialBlockDownloadTimeFactory(ZcashBaseFactory):
                 name='Remove datadir',
                 alwaysRun=True,
             ),
-            steps.POST(urlparse.urljoin(CODESPEED_URL, '/result/add/json/'),
+            steps.POST(urllib.parse.urljoin(CODESPEED_URL, '/result/add/json/'),
                 data={'json': getPerfJson},
                 auth=('buildbot', CODESPEED_PASS),
                 verify=CODESPEED_CERT,
@@ -294,20 +294,20 @@ class ZcashCoverageFactory(ZcashBaseFactory):
             sh('make', 'cov'),
             steps.DirectoryUpload(
                 workersrc="./zcash-gtest.coverage",
-                masterdest=util.Interpolate("/var/code-coverage/%(prop:buildnumber)s-zcash-gtest.coverage"),
-                url=util.Interpolate("https://dev-ci.z.cash/code-coverage/%(prop:buildnumber)s-zcash-gtest.coverage")
+                masterdest=util.Interpolate("{{ buildbot_coverage_dir }}/%(prop:buildnumber)s-zcash-gtest.coverage"),
+                url=util.Interpolate("https://{{ buildbot_host }}/code-coverage/%(prop:buildnumber)s-zcash-gtest.coverage")
             ),
             steps.DirectoryUpload(
                 workersrc="./test_bitcoin.coverage",
-                masterdest=util.Interpolate("/var/code-coverage/%(prop:buildnumber)s-test_zcash.coverage"),
-                url=util.Interpolate("https://dev-ci.z.cash/code-coverage/%(prop:buildnumber)s-test_zcash.coverage")
+                masterdest=util.Interpolate("{{ buildbot_coverage_dir }}/%(prop:buildnumber)s-test_zcash.coverage"),
+                url=util.Interpolate("https://{{ buildbot_host }}/code-coverage/%(prop:buildnumber)s-test_zcash.coverage")
             ),
             steps.DirectoryUpload(
                 workersrc="./total.coverage",
-                masterdest=util.Interpolate("/var/code-coverage/%(prop:buildnumber)s-total.coverage"),
-                url=util.Interpolate("https://dev-ci.z.cash/code-coverage/%(prop:buildnumber)s-total.coverage")
+                masterdest=util.Interpolate("{{ buildbot_coverage_dir }}/%(prop:buildnumber)s-total.coverage"),
+                url=util.Interpolate("https://{{ buildbot_host }}/code-coverage/%(prop:buildnumber)s-total.coverage")
             ),
-            steps.MasterShellCommand("chmod -R 755 /var/code-coverage"),
+            steps.MasterShellCommand("chmod -R 755 {{ buildbot_coverage_dir }}"),
         ])
 
 class ZcashValgrindFactory(ZcashBaseFactory):
@@ -315,7 +315,7 @@ class ZcashValgrindFactory(ZcashBaseFactory):
         ZcashBaseFactory.__init__(self)
 
         self.addSteps([
-            steps.FileDownload(mastersrc="/home/bbmaster/block-107134.tar.xz", workerdest="block-107134.tar.xz"),
+            steps.FileDownload(mastersrc="/home/{{ buildbot_master_user }}/block-107134.tar.xz", workerdest="block-107134.tar.xz"),
             valgrind('sleep'),
             valgrind('parameterloading'),
             valgrind('createjoinsplit'),
@@ -368,7 +368,7 @@ class PairingPerformanceFactory(util.BuildFactory):
     def __init__(self):
         util.BuildFactory.__init__(self, [
             steps.Git(
-                repourl='https://github.com/ebfull/pairing.git',
+                repourl='{{ pairing_git_source }}',
                 mode='incremental',
             ),
             sh('git', 'clean', '-dfx', name='git clean'),
@@ -385,7 +385,7 @@ class PairingPerformanceFactory(util.BuildFactory):
                 env={'PATH': ['./rust-nightly/bin', '${PATH}']},
                 name='cargo bench',
             ),
-            steps.POST(urlparse.urljoin(CODESPEED_URL, '/result/add/json/'),
+            steps.POST(urllib.parse.urljoin(CODESPEED_URL, '/result/add/json/'),
                 data={'json': getPerfJson},
                 auth=('buildbot', CODESPEED_PASS),
                 verify=CODESPEED_CERT,
@@ -400,7 +400,7 @@ class SaplingTestFactory(util.BuildFactory):
         nightly_file = '%s.tar.gz' % nightly_name
         util.BuildFactory.__init__(self, [
             steps.Git(
-                repourl='https://github.com/zcash-hackworks/sapling.git',
+                repourl='{{ sapling_git_source }}',
                 mode='incremental',
             ),
             sh('git', 'clean', '-dfx', name='git clean'),
