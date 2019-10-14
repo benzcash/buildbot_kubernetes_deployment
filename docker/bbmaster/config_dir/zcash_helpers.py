@@ -5,6 +5,7 @@ from buildbot.interfaces import IRenderable
 from textwrap import dedent, wrap
 from twisted.python import log
 from zope.interface.declarations import implementer
+import uuid
 
 def notify(tmpl, *args, **kw):
     """Print a big obvious banner. Reformats msg to allow indented triple-strings."""
@@ -45,8 +46,8 @@ def read_or_generate_secret(path, githubsecret):
 
     # File doesn't exist:
     SECRET_BYTES = 10
-    value = os.urandom(SECRET_BYTES).encode('base64').strip().rstrip('=')
-    with file(path, 'w') as f:
+    value = uuid.uuid4().hex.lower()[0:SECRET_BYTES]
+    with open(path, 'w') as f:
         f.write(value)
 
     if githubsecret:
