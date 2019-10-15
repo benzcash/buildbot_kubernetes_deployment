@@ -77,9 +77,11 @@ c['workers'].append(worker.KubeLatentWorker(
 ))
 
 c['workers'].append(worker.KubeLatentWorker(
-    'bbworker-debian9',
+    'debian9-worker',
     image='gcr.io/uplifted-plate-210520/bbworker-debian9:latest',
     namespace='default',
+    build_wait_timeout=60*60,
+    keepalive_interval=5,
     kube_config=util.KubeInClusterConfigLoader()
 ))
 
@@ -101,20 +103,19 @@ c['protocols'] = {'pb': {'port': 9989}}
 # the 'change_source' setting tells the buildmaster how it should find out
 # about source code changes.  Here we point to the buildbot clone of pyflakes.
 
-c['change_source'] = [
-    changes.GitPoller(
+c['change_source'] = []
+c['change_source'].append(changes.GitPoller(
         'https://github.com/benzcash/zcash.git',
-        project='zcash',
-        workdir='gitpoller-workdir',
-        branches=["auto", "try"],
-        pollinterval=60),
-    changes.GitPoller(
-        'https://github.com/benzcash/zcash.git',
-        project='zcash',
-        workdir='gitpoller-workdir-2',
-        branches=["master"],
-        pollinterval=60),
-]
+        project="zcash-project",
+        workdir='gitpoller-zcash',
+        branches= True,
+        pollinterval=60))
+
+c['change_source'].append(changes.GitPoller(
+        'git://github.com/doubtingben/dotfiles.git',
+        project="dotfile-project",
+        branches= True,
+        pollinterval=300))
 
 ####### SCHEDULERS
 
@@ -122,17 +123,32 @@ c['change_source'] = [
 # case, just kick off a 'runtests' build
 
 c['schedulers'] = []
+
 c['schedulers'].append(schedulers.SingleBranchScheduler(
-                            name="all",
-                            change_filter=util.ChangeFilter(branch='all'),
+                            name="debian9-schedule",
+                            change_filter=util.ChangeFilter(project="zcash-project", branch='test-builds'),
+                            treeStableTimer=5,
+                            builderNames=["debian9-build"]))
+c['schedulers'].append(schedulers.SingleBranchScheduler(
+                            name="dotfiles-schedule",
+                            change_filter=util.ChangeFilter(project="dotfile-project", branch='master'),
+                            treeStableTimer=None,
+                            builderNames=["dotfiles-build"]))
+
+c['schedulers'].append(schedulers.Periodic(
+                            name="Every 60 minutes",
+                            builderNames=["debian9-build"],
+                            periodicBuildTimer=60*60,))
+
+c['schedulers'].append(schedulers.SingleBranchScheduler(
+                            name="test-build-schedule",
+                            change_filter=util.ChangeFilter(project='zcash-project', branch='test-build'),
                             treeStableTimer=60,
-                            builderNames=["debian9"],
+                            builderNames=["debian9-dev-ci-build"],
                             properties={
                                 'publish': False,
                             },
-))
-
-
+                        ))
 ####### BUILDERS
 
 # The 'builders' list defines the Builders, which tell Buildbot how to perform a build:
@@ -140,6 +156,50 @@ c['schedulers'].append(schedulers.SingleBranchScheduler(
 # only take place on one worker.
 
 c['builders'] = []
+
+b_example = []
+
+f = util.BuildFactory()
+f.addStep(steps.Git(repourl='http://github.com/zcash/zcash.git', mode='incremental'))
+f.addStep(steps.ShellCommand(
+                command=['./zcutil/build.sh', util.Interpolate('-j%(prop:numcpus)s')],
+                name='build.sh',
+            ))
+
+b_example.append({
+    'name': 'debian9-build',
+    'workernames': 'debian9-worker',
+    'factory': f,
+    'tags': [
+        'supported',
+    ],
+})
+
+b_example.append({
+    'name': 'debian9-dev-ci-build',
+    'workernames': 'debian9-worker',
+    'factory': ZcashMergeTestFactory(),
+    'properties': {
+        'github_repo_owner': 'zcash',
+        'github_repo_name': 'zcash',
+            },
+    'tags': [
+        'supported',
+    ],
+})
+
+b_dotfiles = []
+factory = util.BuildFactory()
+factory.addStep(steps.Git(repourl='http://github.com/doubtingben/dofiles.git', mode='incremental'))
+factory.addStep(steps.ShellCommand(command=["trial", "pyflakes"]))
+
+c['builders'].append(
+    util.BuilderConfig(name="dotfiles-build",
+      workernames=["debian9-worker"],
+      factory=factory))
+
+c['builders'] += b_example
+
 
 ####### BUILDBOT SERVICES
 
@@ -186,21 +246,3 @@ c['db'] = {
     ),
 }
 
-TAG_SUPPORTED = "supported"
-TAG_UNSUPPORTED = "unsupported"
-
-b_test = []
-
-b_test.append({
-    'name': 'debian9',
-    'workernames': 'bbworker-debian9',
-    'factory': ZcashMergeTestFactory(),
-    'properties': {
-        'github_repo_owner': 'zcash',
-        'github_repo_name': 'zcash',
-            },
-    'tags': [
-        'supported',
-    ],
-})
-c['builders'] += b_test
