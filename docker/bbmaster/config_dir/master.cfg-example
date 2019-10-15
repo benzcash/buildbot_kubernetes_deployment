@@ -65,8 +65,6 @@ def trigger(supportedSchedulerNames, unsupportedSchedulerNames, **kw):
 c = BuildmasterConfig = {}
 
 ####### WORKERS
-worker_password = os.environ['WORKER_PASSWORD']
-
 c['workers'] = []
 
 c['workers'].append(worker.KubeLatentWorker(
@@ -85,11 +83,6 @@ c['workers'].append(worker.KubeLatentWorker(
     kube_config=util.KubeInClusterConfigLoader()
 ))
 
-c['mq'] = {
-    'type': 'wamp',
-    'router_url': 'ws://crossbar:8080/ws',
-    'realm': 'realm1',
-}
 
 # 'protocols' contains information about protocols which master will use for
 # communicating with workers. You must define at least 'port' option that workers
@@ -111,11 +104,6 @@ c['change_source'].append(changes.GitPoller(
         branches= True,
         pollinterval=60))
 
-c['change_source'].append(changes.GitPoller(
-        'git://github.com/doubtingben/dotfiles.git',
-        project="dotfile-project",
-        branches= True,
-        pollinterval=300))
 
 ####### SCHEDULERS
 
@@ -129,26 +117,13 @@ c['schedulers'].append(schedulers.SingleBranchScheduler(
                             change_filter=util.ChangeFilter(project="zcash-project", branch='test-builds'),
                             treeStableTimer=5,
                             builderNames=["debian9-build"]))
-c['schedulers'].append(schedulers.SingleBranchScheduler(
-                            name="dotfiles-schedule",
-                            change_filter=util.ChangeFilter(project="dotfile-project", branch='master'),
-                            treeStableTimer=None,
-                            builderNames=["dotfiles-build"]))
+
 
 c['schedulers'].append(schedulers.Periodic(
-                            name="Every 60 minutes",
+                            name="Every 30 minutes",
                             builderNames=["debian9-build"],
-                            periodicBuildTimer=60*60,))
+                            periodicBuildTimer=60*30,))
 
-c['schedulers'].append(schedulers.SingleBranchScheduler(
-                            name="test-build-schedule",
-                            change_filter=util.ChangeFilter(project='zcash-project', branch='test-build'),
-                            treeStableTimer=60,
-                            builderNames=["debian9-dev-ci-build"],
-                            properties={
-                                'publish': False,
-                            },
-                        ))
 ####### BUILDERS
 
 # The 'builders' list defines the Builders, which tell Buildbot how to perform a build:
@@ -175,28 +150,6 @@ b_example.append({
     ],
 })
 
-b_example.append({
-    'name': 'debian9-dev-ci-build',
-    'workernames': 'debian9-worker',
-    'factory': ZcashMergeTestFactory(),
-    'properties': {
-        'github_repo_owner': 'zcash',
-        'github_repo_name': 'zcash',
-            },
-    'tags': [
-        'supported',
-    ],
-})
-
-b_dotfiles = []
-factory = util.BuildFactory()
-factory.addStep(steps.Git(repourl='http://github.com/doubtingben/dofiles.git', mode='incremental'))
-factory.addStep(steps.ShellCommand(command=["trial", "pyflakes"]))
-
-c['builders'].append(
-    util.BuilderConfig(name="dotfiles-build",
-      workernames=["debian9-worker"],
-      factory=factory))
 
 c['builders'] += b_example
 

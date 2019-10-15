@@ -7,7 +7,7 @@ metadata:
     name: buildbot-master
   name: buildbot-master
 spec:
-  replicas: 2
+  replicas: 1
   template:
     metadata:
       labels:
@@ -23,24 +23,11 @@ spec:
             configMapKeyRef:
               name: buildbot-config
               key: master_url
-        - name: NUM_WORKERS
-          valueFrom:
-            configMapKeyRef:
-              name: buildbot-config
-              key: num_workers
         - name: PG_PASSWORD
           valueFrom:
             secretKeyRef:
               name: buildbot
               key: pg_password
-        - name: WORKER_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: buildbot
-              key: worker_password
-        volumeMounts:
-        - name: buildbot-master-file
-          mountPath: /mnt
         livenessProbe:
           httpGet:
             path: /
@@ -51,8 +38,4 @@ spec:
         - containerPort: 8010
           name: buildbot-ui
           protocol: TCP
-      volumes:
-      - name: buildbot-master-file
-        configMap:
-          name: buildbot-master.cfg
       serviceAccountName: default
