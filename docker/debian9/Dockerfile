@@ -16,6 +16,7 @@ RUN apt-get update \
        lcov \
        valgrind \
        dumb-init \
+       bsdmainutils \
     && pip install \
        virtualenv \
        pip

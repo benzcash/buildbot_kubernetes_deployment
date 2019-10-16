@@ -35,6 +35,10 @@ from zcash_helpers import (
     read_required_path,
 )
 
+from zcash_workers import (
+    ZcashBaseKubeLatentWorker,
+)
+
 WEB_CREDS={"homer": "doh!"}
 
 authz = util.Authz(
@@ -83,6 +87,14 @@ c['workers'].append(worker.KubeLatentWorker(
     kube_config=util.KubeInClusterConfigLoader()
 ))
 
+c['workers'].append(ZcashBaseKubeLatentWorker(
+    'debian9-worker-big',
+    image='gcr.io/uplifted-plate-210520/bbworker-debian9:latest',
+    namespace='default',
+    build_wait_timeout=60*60,
+    keepalive_interval=5,
+    kube_config=util.KubeInClusterConfigLoader()
+))
 
 # 'protocols' contains information about protocols which master will use for
 # communicating with workers. You must define at least 'port' option that workers
@@ -143,7 +155,7 @@ f.addStep(steps.ShellCommand(
 
 b_example.append({
     'name': 'debian9-build',
-    'workernames': 'debian9-worker',
+    'workernames': 'debian9-worker-big',
     'factory': f,
     'tags': [
         'supported',
